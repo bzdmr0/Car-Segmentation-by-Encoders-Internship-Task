@@ -450,11 +450,7 @@ def visualize_test_predictions(model, test_loader, num_samples=3, encoder_name="
     plt.savefig(f'./differences/last/Original_and_Predicted_Mask_{encoder_name}.png', dpi=300, bbox_inches='tight')
     plt.show()
 
-
-#encoder = int(input("For DenseNet121 encoder (1), MobileNetV2 encoder (2), ResNet18 encoder (3) : "))
-#
 encoderList = {1: "densenet121", 2: "resnet18", 3: "mobilenet_v2"}
-
 for encoder in [2]:
     encoder_name = encoderList[encoder]
     if encoder == 1:
@@ -509,7 +505,6 @@ for encoder in [2]:
     except Exception:
         test_metrics = trainer.test(model=model, dataloaders=test_loader, verbose=False)
     print(test_metrics)
-
 
 # Enhanced test visualization with highlighted differences
     print("\nGenerating test visualizations...")

@@ -59,4 +59,3 @@ differences/
 lightning_logs/
 convert_coco_to_masks.py
 convert_images_to_png.py
-plot_manual_metrics.py
