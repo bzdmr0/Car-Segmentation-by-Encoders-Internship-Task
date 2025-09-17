@@ -451,7 +451,7 @@ def visualize_test_predictions(model, test_loader, num_samples=3, encoder_name="
     plt.show()
 
 encoderList = {1: "densenet121", 2: "resnet18", 3: "mobilenet_v2"}
-for encoder in [2]:
+for encoder in [1,2,3]:
     encoder_name = encoderList[encoder]
     if encoder == 1:
         model = SegmentationModel(
