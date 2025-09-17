@@ -14,6 +14,24 @@ def find_manual_metrics_files(base_dir: str):
     return sorted(set(glob.glob(pattern)))
 
 
+def determine_best_epoch(df: pd.DataFrame, col: str, mode: str = 'max'):
+    """Pick the best epoch using common validation metrics.
+
+    Preference order: val_dataset_iou (max) -> val_f1_score (max) -> val_accuracy (max) -> val_loss (min)
+    Returns (best_epoch:int|None, best_col:str|None, best_value:float|None)
+    """
+    if col in df.columns and df[col].notna().any():
+        idx = df[col].idxmax() if mode == 'max' else df[col].idxmin()
+        try:
+            best_epoch = int(df.loc[idx, 'epoch']) if 'epoch' in df.columns else int(idx)
+        except Exception:
+            best_epoch = int(idx)
+        best_value = float(df.loc[idx, col])
+        return best_epoch, col, best_value
+        
+    return None, None, None
+
+
 def plot_train_val_pairs(df: pd.DataFrame, out_dir: str, base: str, version: str):
     pairs = [
         ('train_f1_score', 'val_f1_score', 'F1-Score'),
@@ -22,6 +40,10 @@ def plot_train_val_pairs(df: pd.DataFrame, out_dir: str, base: str, version: str
         ('train_loss', 'val_loss', 'Loss'),
     ]
     for train_col, val_col, title in pairs:
+        if title == "Loss":
+            best_epoch, best_col, best_val = determine_best_epoch(df,val_col, mode='min')
+        else:
+            
         present = [c for c in (train_col, val_col) if c in df.columns]
         if not present:
             continue
@@ -34,7 +56,24 @@ def plot_train_val_pairs(df: pd.DataFrame, out_dir: str, base: str, version: str
             ax.plot(x, df[train_col], label='train', marker='o')
         if val_col in df.columns:
             ax.plot(x, df[val_col], label='val', marker='o')
-        ax.set_title(f"{version} - {base} - {title}")
+        # Best epoch indicator
+        subtitle = ""
+        if best_epoch is not None:
+            ax.axvline(best_epoch, color='crimson', linestyle='--', alpha=0.7, linewidth=1.5, label=f'best epoch ({best_epoch})')
+            # highlight best point on validation curve if available
+            if val_col in df.columns:
+                if 'epoch' in df.columns:
+                    row = df[df['epoch'] == best_epoch]
+                    if not row.empty and pd.notna(row[val_col].values[0]):
+                        ax.scatter(best_epoch, float(row[val_col].values[0]), color='crimson', zorder=5)
+                else:
+                    # when no epoch column, x is position
+                    if best_epoch < len(df) and pd.notna(df.loc[best_epoch, val_col]):
+                        ax.scatter(best_epoch, float(df.loc[best_epoch, val_col]), color='crimson', zorder=5)
+            if best_col is not None and best_val is not None:
+                subtitle = f" (best: {best_col}={best_val:.4f} @ epoch {best_epoch})"
+
+        ax.set_title(f"{version} - {base} - {title}{subtitle}")
         ax.set_xlabel('epoch')
         ax.grid(True, alpha=0.3)
         ax.legend()
@@ -58,7 +97,8 @@ def main():
         except Exception as e:
             print(f"Failed to read {p}: {e}")
             continue
-        df = df.sort_values('epoch') if 'epoch' in df.columns else df
+        # Sort by epoch and reset index to make plotting and best-epoch alignment robust
+        df = df.sort_values('epoch').reset_index(drop=True) if 'epoch' in df.columns else df
         out_dir = os.path.dirname(p)
         base = os.path.splitext(os.path.basename(p))[0]
         version = os.path.basename(out_dir)

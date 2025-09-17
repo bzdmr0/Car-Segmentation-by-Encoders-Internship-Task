@@ -48,14 +48,13 @@ Thumbs.db
 *.mov
 data/
 img/
-download_from_kaggle.py
 integrate_images.py
 resize_images.py
 split_images.py
-test.py
 car-segmentation.v1i.coco-segmentation/
 data/
 differences/
 lightning_logs/
 convert_coco_to_masks.py
 convert_images_to_png.py
+temp/

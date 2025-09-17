@@ -1,31 +1,185 @@
 import os
 import cv2
-
+import glob
+from typing import Optional
 import torch
 import numpy as np
 import albumentations as A
 import matplotlib.pyplot as plt
 import pandas as pd
-from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as BaseDataset
 from torch.optim import lr_scheduler
 import segmentation_models_pytorch as smp
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+import time
+from torch.utils.data import DataLoader
+import json
 
-DATA_DIR = "./car-segmentation.v1i.coco-segmentation/"
 
-x_train_dir = os.path.join(DATA_DIR, "train/images")
-y_train_dir = os.path.join(DATA_DIR, "train/masks")
+ENCODER_LIST = {1: ("densenet121","segformer"), 2: ("resnet18","DeepLabV3plus"), 3: ("mobilenet_v2","DeepLabV3plus")}
 
-x_valid_dir = os.path.join(DATA_DIR, "valid/images")
-y_valid_dir = os.path.join(DATA_DIR, "valid/masks")
 
-x_test_dir = os.path.join(DATA_DIR, "test/images")
-y_test_dir = os.path.join(DATA_DIR, "test/masks")
+
+
+ROOT = os.path.dirname(__file__)
+LOGS_DIR = os.path.join(ROOT, 'lightning_logs')
+
+def build_dataloader(x_dir: str, y_dir: str, batch_size: int = 8):
+    if "train" in x_dir and "train" in y_dir:
+        ds = Dataset(x_dir, y_dir, augmentation=get_training_augmentation())
+    else:
+        ds = Dataset(x_dir, y_dir, augmentation=get_validation_augmentation())
+    data_loader = DataLoader(ds, batch_size=batch_size, shuffle=True)
+    return data_loader
+
+def save_benchmark_result(json_obj: dict, encoder_name: str, output_folder: Optional[str]) -> str:
+    out_path = os.path.join(output_folder, f"inference_benchmark_{encoder_name}.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(json_obj, f, indent=2)
+    return out_path
+
+def benchmark_inference(model: pl.LightningModule, dataloader: DataLoader, encoder_info: tuple, device: str | None = None, warmup_batches: int = 3, measure_batches: int = 20):
+    """Benchmark inference latency and throughput on the given dataloader.
+
+    Returns a dict with:
+      - device, batch_size, batches_measured, total_images
+      - total_time_s, avg_batch_s, avg_image_s, throughput_imgs_per_s
+    """
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.eval().to(device)
+    encoder_name, arch = encoder_info
+
+    def _sync():
+        if device.startswith("cuda"):
+            torch.cuda.synchronize()
+
+    total_time = 0.0
+    total_images = 0
+
+    with torch.inference_mode():
+        # Warmup
+        for i, (x, _) in enumerate(dataloader):
+            if i >= warmup_batches:
+                break
+            x = x.to(device, non_blocking=True)
+            _ = model(x)
+
+        # Measure
+        measured = 0
+        for i, (x, _) in enumerate(dataloader):
+            if measured >= measure_batches:
+                break
+            x = x.to(device, non_blocking=True)
+            _sync()
+            t0 = time.perf_counter()
+            _ = model(x)
+            _sync()
+            dt = time.perf_counter() - t0
+            total_time += dt
+            total_images += int(x.shape[0])
+            measured += 1
+
+    batches_measured = measured
+    avg_batch_s = total_time / batches_measured if batches_measured > 0 else float('nan')
+    avg_image_s = total_time / total_images if total_images > 0 else float('nan')
+    throughput = total_images / total_time if total_time > 0 else float('nan')
+
+    return {
+        "device": device,
+        "batch_size": getattr(dataloader, "batch_size", None),
+        "batches_measured": batches_measured,
+        "total_images": total_images,
+        "total_time_s": total_time,
+        "avg_batch_s": avg_batch_s,
+        "avg_image_s": avg_image_s,
+        "throughput_imgs_per_s": throughput,
+        "encoder_name": encoder_name,
+        "architecture": arch,
+    }
+
+
+def find_best_checkpoint_for_encoder(encoder_name: str):
+    pattern = os.path.join(LOGS_DIR, "**", "checkpoints", f"{encoder_name}-*.ckpt")
+    matches = glob.glob(pattern, recursive=True)
+    if not matches:
+        return None
+    return max(matches, key=lambda p: os.path.getmtime(p))
+
+def determine_best_epoch(df: pd.DataFrame, col: str, mode: str = 'max'):
+    """Pick the best epoch using common validation metrics.
+
+    Preference order: val_dataset_iou (max) -> val_f1_score (max) -> val_accuracy (max) -> val_loss (min)
+    Returns (best_epoch:int|None, best_col:str|None, best_value:float|None)
+    """
+    if col in df.columns and df[col].notna().any():
+        idx = df[col].idxmax() if mode == 'max' else df[col].idxmin()
+        try:
+            best_epoch = int(df.loc[idx, 'epoch']) if 'epoch' in df.columns else int(idx)
+        except Exception:
+            best_epoch = int(idx)
+        best_value = float(df.loc[idx, col])
+        return best_epoch, col, best_value
+        
+    return None, None, None
+
+
+def plot_train_val_pairs(df: pd.DataFrame, out_dir: str, base: str, version: str):
+    pairs = [
+        ('train_f1_score', 'val_f1_score', 'F1-Score'),
+        ('train_accuracy', 'val_accuracy', 'Accuracy'),
+        ('train_dataset_iou', 'val_dataset_iou', 'IoU_dataset'),
+        ('train_loss', 'val_loss', 'Loss'),
+    ]
+    for train_col, val_col, title in pairs:
+        if title == "Loss":
+            best_epoch, best_col, best_val = determine_best_epoch(df,val_col, mode='min')
+        else:
+            best_epoch, best_col, best_val = determine_best_epoch(df,val_col)
+        present = [c for c in (train_col, val_col) if c in df.columns]
+        if not present:
+            continue
+        fig, ax = plt.subplots(figsize=(9, 5))
+        if 'epoch' in df.columns:
+            x = df['epoch']
+        else:
+            x = range(len(df))
+        if train_col in df.columns:
+            ax.plot(x, df[train_col], label='train', marker='o')
+        if val_col in df.columns:
+            ax.plot(x, df[val_col], label='val', marker='o')
+        # Best epoch indicator
+        subtitle = ""
+        if best_epoch is not None:
+            ax.axvline(best_epoch, color='crimson', linestyle='--', alpha=0.7, linewidth=1.5, label=f'best epoch ({best_epoch})')
+            # highlight best point on validation curve if available
+            if val_col in df.columns:
+                if 'epoch' in df.columns:
+                    row = df[df['epoch'] == best_epoch]
+                    if not row.empty and pd.notna(row[val_col].values[0]):
+                        ax.scatter(best_epoch, float(row[val_col].values[0]), color='crimson', zorder=5)
+                else:
+                    # when no epoch column, x is position
+                    if best_epoch < len(df) and pd.notna(df.loc[best_epoch, val_col]):
+                        ax.scatter(best_epoch, float(df.loc[best_epoch, val_col]), color='crimson', zorder=5)
+            if best_col is not None and best_val is not None:
+                subtitle = f" (best: {best_col}={best_val:.4f} @ epoch {best_epoch})"
+
+        ax.set_title(f"{version} - {base} - {title}{subtitle}")
+        ax.set_xlabel('epoch')
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        fig.tight_layout()
+        out_path = os.path.join(out_dir, f"{base}_{title.lower()}.png")
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        print(f"Saved: {out_path}")
+
+def find_manual_metrics_files(encoder_name: str):
+    pattern = os.path.join(LOGS_DIR, 'version_*', f'metrics_manual_{encoder_name}_*.csv')
+    return sorted(set(glob.glob(pattern)))
 
 class Dataset(BaseDataset):
-    """CamVid Dataset. Read images, apply augmentation transformations.
+    """car-segmentation.v1i.coco-segmentation Dataset. Read images, apply augmentation transformations.
 
     Args:
         images_dir (str): path to images folder
@@ -130,32 +284,6 @@ def get_validation_augmentation():
         A.PadIfNeeded(384, 480),
     ]
     return A.Compose(test_transform)
-    
-train_dataset = Dataset(
-    x_train_dir,
-    y_train_dir,
-    augmentation=get_training_augmentation(),
-)
-
-valid_dataset = Dataset(
-    x_valid_dir,
-    y_valid_dir,
-    augmentation=get_validation_augmentation(),
-)
-
-test_dataset = Dataset(
-    x_test_dir,
-    y_test_dir,
-    augmentation=get_validation_augmentation(),
-)
-
-train_loader = DataLoader(train_dataset,batch_size=8, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False )
-valid_loader = DataLoader(valid_dataset, batch_size=8, shuffle=False )
-
-
-EPOCHS = 20
-T_MAX = EPOCHS * len(train_loader)
 
 class SegmentationModel(pl.LightningModule):
     def __init__(self, arch, encoder_name, in_channels, **kwargs):
@@ -178,10 +306,14 @@ class SegmentationModel(pl.LightningModule):
         self.training_step_outputs = []
         self.validation_step_outputs = []
         self.test_step_outputs = []
+        self.t_max = None  # to be set later for LR scheduler
 
         # Manual per-epoch history for plotting later
         self.history = {"train": [], "val": [], "test": []}
     
+    def t_max_setter(self, t_max):
+        self.t_max = t_max
+            
     def forward(self, image):
         # Normalize the input image
         image = (image - self.mean) / self.std
@@ -341,7 +473,7 @@ class SegmentationModel(pl.LightningModule):
     
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=2e-4)
-        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_MAX, eta_min=1e-5)
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.t_max, eta_min=1e-5) #TODO: optimize T_max setting
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
@@ -360,7 +492,10 @@ def visualize_test_predictions(model, test_loader, num_samples=3, encoder_name="
         model.eval()
         logits = model(images)
     pred_masks = logits.sigmoid()
-    
+    ll_root = os.path.join(".", "lightning_logs")
+    visualization_folder = os.path.join(ll_root,f'{encoder_name}_visualizations/')
+    os.makedirs(visualization_folder, exist_ok=True)
+
     # Create visualizations a. Yanyana gösterim:
     fig, axes = plt.subplots(num_samples, 4, figsize=(20, 5*num_samples))
     if num_samples == 1:
@@ -410,7 +545,8 @@ def visualize_test_predictions(model, test_loader, num_samples=3, encoder_name="
         axes[idx, 3].axis("off")
     
     plt.tight_layout()
-    plt.savefig(f'./differences/last/Highlighted_Differences_{encoder_name}.png', dpi=300, bbox_inches='tight')
+    H_D_img = os.path.join(visualization_folder, f'Highlighted_Differences.png')
+    plt.savefig(H_D_img, dpi=300, bbox_inches='tight')
     plt.show()
     
     # Create visualizations b. Yanyana gösterim:
@@ -447,65 +583,79 @@ def visualize_test_predictions(model, test_loader, num_samples=3, encoder_name="
         axes[idx, 2].axis("off")
     
     plt.tight_layout()
-    plt.savefig(f'./differences/last/Original_and_Predicted_Mask_{encoder_name}.png', dpi=300, bbox_inches='tight')
+    O_P_img = os.path.join(visualization_folder, f'Original_and_Predicted_Mask.png')
+    plt.savefig(O_P_img, dpi=300, bbox_inches='tight')
     plt.show()
 
-encoderList = {1: "densenet121", 2: "resnet18", 3: "mobilenet_v2"}
-for encoder in [1,2,3]:
-    encoder_name = encoderList[encoder]
-    if encoder == 1:
-        model = SegmentationModel(
-            arch="SegFormer",
-            encoder_name=encoder_name,
-            in_channels=3,
-        )
-    else:
-        model = SegmentationModel(
-            arch="DeepLabV3plus",
-            encoder_name=encoder_name,
-            in_channels=3,
-        )
+# -----------------------------
+# Timing utilities
+# -----------------------------
 
-    # Callbacks: save best (by val_dataset_iou) and last checkpoints; optionally stop early
-    checkpoint_callback = ModelCheckpoint(
-        monitor="val_dataset_iou",
-        mode="max",
-        save_top_k=1,
-        save_last=True,
-        # Keep default directory under logger: lightning_logs/version_*/checkpoints
-        # Optional: customize filename below
-        filename=f"{encoder_name}-{{epoch:02d}}-{{val_dataset_iou:.4f}}",
-        auto_insert_metric_name=False,
-    )
-    early_stop = EarlyStopping(monitor="val_dataset_iou", mode="max", patience=3)
+class TimingCallback(pl.Callback):
+    """Measure training/validation epoch durations and total fit time.
 
-    trainer = pl.Trainer(
-        max_epochs=EPOCHS,
-        log_every_n_steps=1,
-        callbacks=[checkpoint_callback, early_stop],
-        enable_checkpointing=True,
-    )
+    Saves a CSV to the logger directory with columns:
+      - epoch
+      - train_epoch_seconds
+      - val_epoch_seconds (if validation runs)
+      - fit_total_seconds (same value on each row for convenience)
+    """
 
-    trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=valid_loader)
+    def __init__(self, encoder_name: str):
+        super().__init__()
+        self.encoder_name = encoder_name
+        self.fit_start = None
+        self.epoch_start = None
+        self.val_start = None
+        self.rows = []  # list of dicts per epoch
 
-    # Report best checkpoint for this encoder
-    print(f"Best checkpoint for {encoder_name}: {checkpoint_callback.best_model_path}")
-    print(f"Best {encoder_name} val_dataset_iou: {checkpoint_callback.best_model_score}")
+    def on_fit_start(self, trainer, pl_module):
+        self.fit_start = time.perf_counter()
 
-    # Validate and Test using the best checkpoint
-    try:
-        valid_metrics = trainer.validate(ckpt_path="best", dataloaders=valid_loader, verbose=False)
-    except Exception:
-        # Fallback if 'best' alias not supported
-        valid_metrics = trainer.validate(model=model, dataloaders=valid_loader, verbose=False)
-    print(valid_metrics)
+    def on_train_epoch_start(self, trainer, pl_module):
+        self.epoch_start = time.perf_counter()
 
-    try:
-        test_metrics = trainer.test(ckpt_path="best", dataloaders=test_loader, verbose=False)
-    except Exception:
-        test_metrics = trainer.test(model=model, dataloaders=test_loader, verbose=False)
-    print(test_metrics)
+    def on_train_epoch_end(self, trainer, pl_module):
+        # Training epoch duration
+        if self.epoch_start is not None:
+            train_sec = time.perf_counter() - self.epoch_start
+        else:
+            train_sec = float('nan')
+        self.rows.append({
+            "epoch": int(trainer.current_epoch),
+            "train_epoch_seconds": float(train_sec),
+            "val_epoch_seconds": float('nan'),  # will be filled in validation end
+        })
+        self.epoch_start = None
 
-# Enhanced test visualization with highlighted differences
-    print("\nGenerating test visualizations...")
-    visualize_test_predictions(model, test_loader, num_samples=3, encoder_name=encoderList[encoder])
+    def on_validation_epoch_start(self, trainer, pl_module):
+        self.val_start = time.perf_counter()
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        if self.val_start is not None and self.rows:
+            val_sec = time.perf_counter() - self.val_start
+            self.rows[-1]["val_epoch_seconds"] = float(val_sec)
+        self.val_start = None
+
+    def on_fit_end(self, trainer, pl_module):
+        fit_total_seconds = None
+        if self.fit_start is not None:
+            fit_total_seconds = time.perf_counter() - self.fit_start
+        # Save to logger dir
+        log_dir = None
+        try:
+            log_dir = trainer.logger.log_dir
+        except Exception:
+            pass
+        if not log_dir:
+            log_dir = trainer.default_root_dir
+        os.makedirs(log_dir, exist_ok=True)
+        # Write CSV
+        df = pd.DataFrame(self.rows)
+        if df.empty:
+            # Ensure at least a summary row exists
+            df = pd.DataFrame([{"epoch": -1, "train_epoch_seconds": float('nan'), "val_epoch_seconds": float('nan')}])
+        df["fit_total_seconds"] = float(fit_total_seconds) if fit_total_seconds is not None else float('nan')
+        out_csv = os.path.join(log_dir, f"timings_{self.encoder_name}.csv")
+        df.to_csv(out_csv, index=False)
+        print(f"Saved training timings to {out_csv}")
