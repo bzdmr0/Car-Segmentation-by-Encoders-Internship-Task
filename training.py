@@ -1,4 +1,5 @@
 import os
+import time
 import pandas as pd
 
 import pytorch_lightning as pl
@@ -63,6 +64,8 @@ def train_all_encoders(batch_size: int = 8):
 
         print(f"Best checkpoint for {encoder_name}: {checkpoint_callback.best_model_path}")
         print(f"Best {encoder_name} val_dataset_iou: {checkpoint_callback.best_model_score}")
+        
+        time.sleep(2)  # wait for file system to settle
 
         metrics_path = find_manual_metrics_files(encoder_name)
         if not metrics_path:
