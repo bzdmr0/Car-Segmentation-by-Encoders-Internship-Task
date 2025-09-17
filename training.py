@@ -1,18 +1,11 @@
 import os
-import glob
 import pandas as pd
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-from torch.utils.data import DataLoader
-import matplotlib.pyplot as plt
-
 
 # Reuse definitions from main.py (safe to import, guarded main())
 from main import (
-    Dataset,
-    get_training_augmentation,
-    get_validation_augmentation,
     SegmentationModel,
     TimingCallback,
     ENCODER_LIST,

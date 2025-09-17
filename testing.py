@@ -1,17 +1,8 @@
-
-import torch
-import glob
-import json
 import os
-from typing import Dict, List, Optional, Tuple
-import time
+from typing import List, Optional, Tuple
 import pytorch_lightning as pl
 
-from torch.utils.data import DataLoader
-
 from main import (
-    Dataset,
-    get_validation_augmentation,
     SegmentationModel,
     ENCODER_LIST,
     visualize_test_predictions,

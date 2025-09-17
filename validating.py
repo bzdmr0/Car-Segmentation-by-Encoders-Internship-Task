@@ -1,11 +1,8 @@
 import os
-import glob
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 
 from main import (
-    Dataset,
-    get_validation_augmentation,
     SegmentationModel,
     ENCODER_LIST,
     find_best_checkpoint_for_encoder,
