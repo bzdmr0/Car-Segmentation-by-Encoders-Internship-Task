@@ -67,11 +67,13 @@ def train_all_encoders(batch_size: int = 8):
         
         time.sleep(2)  # wait for file system to settle
 
-        metrics_path = find_manual_metrics_files(encoder_name)
-        if not metrics_path:
+        paths = find_manual_metrics_files(encoder_name)
+        if not paths:
             print(f"No manual metrics files found under {LOGS_DIR}")
             return
-        print(f"Found {len(metrics_path)} manual metrics files")
+        print(f"Found {len(paths)} manual metrics files for {encoder_name}")
+        # pick latest by mtime
+        metrics_path = max(paths, key=lambda p: os.path.getmtime(p))
         
         try:
             df = pd.read_csv(metrics_path)

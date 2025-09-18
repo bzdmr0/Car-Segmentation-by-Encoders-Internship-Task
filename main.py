@@ -25,17 +25,51 @@ ROOT = os.path.dirname(__file__)
 LOGS_DIR = os.path.join(ROOT, 'lightning_logs')
 
 def build_dataloader(x_dir: str, y_dir: str, batch_size: int = 8):
-    if "train" in x_dir and "train" in y_dir:
-        ds = Dataset(x_dir, y_dir, augmentation=get_training_augmentation())
-    else:
-        ds = Dataset(x_dir, y_dir, augmentation=get_validation_augmentation())
-    data_loader = DataLoader(ds, batch_size=batch_size, shuffle=True)
+    is_train = ("train" in x_dir and "train" in y_dir)
+    ds = Dataset(
+        x_dir,
+        y_dir,
+        augmentation=get_training_augmentation() if is_train else get_validation_augmentation(),
+    )
+    # Shuffle only during training
+    data_loader = DataLoader(ds, batch_size=batch_size, shuffle=is_train)
     return data_loader
 
 def save_benchmark_result(json_obj: dict, encoder_name: str, output_folder: Optional[str]) -> str:
+    os.makedirs(output_folder, exist_ok=True)
     out_path = os.path.join(output_folder, f"inference_benchmark_{encoder_name}.json")
+    
+    # Ensure encoder name is present in the JSON object
+    json_obj = dict(json_obj)
+    if encoder_name and "encoder_name" not in json_obj:
+        json_obj["encoder_name"] = encoder_name
+        
+    existing: list = []
+    if os.path.exists(out_path):
+        try:
+            with open(out_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                existing = data
+            elif isinstance(data, dict):
+                existing = [data]
+        except Exception as e:
+            print(f"Warning: could not read {out_path}: {e}. Recreating file.")
+            existing = []
+            
+    # Update matching encoder entry or append if missing
+    idx = next((i for i, item in enumerate(existing)
+                if item.get("encoder_name") == encoder_name), None)
+    if idx is None:
+        existing.append(json_obj)
+    else:
+        existing[idx].update(json_obj)
+    
+     # Sort by encoder_name for readability
+    existing = sorted(existing, key=lambda d: (d.get("encoder_name")))
+    
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(json_obj, f, indent=2)
+        json.dump(existing, f, indent=2)
     return out_path
 
 def benchmark_inference(model: pl.LightningModule, dataloader: DataLoader, encoder_info: tuple, device: str | None = None, warmup_batches: int = 3, measure_batches: int = 20):
@@ -46,6 +80,7 @@ def benchmark_inference(model: pl.LightningModule, dataloader: DataLoader, encod
       - total_time_s, avg_batch_s, avg_image_s, throughput_imgs_per_s
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    gpu_name = torch.cuda.get_device_name(0) if device.startswith("cuda") else "cpu"
     model = model.eval().to(device)
     encoder_name, arch = encoder_info
 
@@ -86,6 +121,7 @@ def benchmark_inference(model: pl.LightningModule, dataloader: DataLoader, encod
 
     return {
         "device": device,
+        "gpu_name": gpu_name,
         "batch_size": getattr(dataloader, "batch_size", None),
         "batches_measured": batches_measured,
         "total_images": total_images,
@@ -175,7 +211,8 @@ def plot_train_val_pairs(df: pd.DataFrame, out_dir: str, base: str, version: str
         print(f"Saved: {out_path}")
 
 def find_manual_metrics_files(encoder_name: str):
-    pattern = os.path.join(LOGS_DIR, 'version_*', f'metrics_manual_{encoder_name}_*.csv')
+    # SegmentationModel saves as: metrics_manual_{encoder_name}.csv
+    pattern = os.path.join(LOGS_DIR, 'version_*', f'metrics_manual_{encoder_name}.csv')
     return sorted(set(glob.glob(pattern)))
 
 class Dataset(BaseDataset):
@@ -223,22 +260,6 @@ class Dataset(BaseDataset):
 
     def __len__(self):
         return len(self.ids)
-    
-# helper function for data visualization
-def visualize(**images):
-    """PLot images in one row."""
-    n = len(images)
-    plt.figure(figsize=(16, 5))
-    for i, (name, image) in enumerate(images.items()):
-        plt.subplot(1, n, i + 1)
-        plt.xticks([])
-        plt.yticks([])
-        plt.title(" ".join(name.split("_")).title())
-        if name == "image":
-            plt.imshow(image.transpose(1, 2, 0))
-        else:
-            plt.imshow(image)
-    plt.show()
     
 # training set images augmentation
 def get_training_augmentation():
@@ -465,11 +486,6 @@ class SegmentationModel(pl.LightningModule):
         # Save after training (contains train and val)
         self._save_history()
         return
-
-    def on_test_end(self):
-        # Save again after test to include test_* columns if present
-        self._save_history()
-        return
     
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=2e-4)
@@ -540,8 +556,21 @@ def visualize_test_predictions(model, test_loader, num_samples=3, encoder_name="
         fn = (true_mask > 0.5) & (pred_mask <= 0.5)
         diff_mask[fn] = [0, 0, 1]  # Blue
         
+        true_count = np.count_nonzero(true_mask > 0.5)
+        # Count colors in diff_mask
+        is_green = np.all(diff_mask == [0, 1, 0], axis=-1)
+        is_red   = np.all(diff_mask == [1, 0, 0], axis=-1)
+        is_blue  = np.all(diff_mask == [0, 0, 1], axis=-1)
+        green_count = int(is_green.sum())
+        red_count   = int(is_red.sum())
+        blue_count  = int(is_blue.sum())
+        total_px    = diff_mask.shape[0] * diff_mask.shape[1]
+        
+        tp_percent = (green_count / true_count * 100) if true_count > 0 else 0.0
+        fn_percent = (blue_count / true_count * 100) if true_count > 0 else 0.0
+        
         axes[idx, 3].imshow(diff_mask)
-        axes[idx, 3].set_title("Highlighted Difference\n(Green: TP, Red: FP, Blue: FN)")
+        axes[idx, 3].set_title(f"Highlighted Difference\n(Green: TP({tp_percent:.1f}%), Red: FP, Blue: FN({fn_percent:.1f}%))")
         axes[idx, 3].axis("off")
     
     plt.tight_layout()

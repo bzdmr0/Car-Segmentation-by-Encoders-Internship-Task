@@ -1,6 +1,7 @@
 import os
 from typing import List, Optional, Tuple
 import pytorch_lightning as pl
+import time
 
 from main import (
     SegmentationModel,
@@ -38,17 +39,26 @@ def test_all_encoders(batch_size: int = 8):
         trainer = pl.Trainer(logger=False, enable_checkpointing=False)
         metrics = trainer.test(model=model, dataloaders=test_loader, verbose=False)
         print(metrics)
+        
+        time.sleep(2)  # wait for file system to settle
 
         print("\nGenerating test visualizations...")
         visualize_test_predictions(model, test_loader, num_samples=3, encoder_name=encoder_name)
 
-        metrics_path = find_manual_metrics_files(encoder_name)
-        out_folder = os.path.dirname(metrics_path)
+        paths = find_manual_metrics_files(encoder_name)
+        if paths:
+            metrics_path = max(paths, key=lambda p: os.path.getmtime(p))
+            out_folder = os.path.dirname(metrics_path)
+        else:
+            # Fallback: save next to checkpoint if no metrics CSV yet
+            out_folder = os.path.dirname(ckpt) if ckpt else os.path.join('.', 'lightning_logs')
+        os.makedirs(out_folder, exist_ok=True)
 
         result = benchmark_inference(model, test_loader, (encoder_name, arch))
-        out_path = save_benchmark_result(result, encoder_name, out_folder)
+        merged_result = {**result, **{k: v for d in metrics for k, v in d.items()}}
+        out_path = save_benchmark_result(merged_result, encoder_name, out_folder)
         print(f"Saved benchmark for {encoder_name} -> {out_path}")
-        summary.append((encoder_name, ckpt, result))
+        summary.append((encoder_name, ckpt, merged_result))
 
 
 if __name__ == "__main__":

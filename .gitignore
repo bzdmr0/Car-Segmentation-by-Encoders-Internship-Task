@@ -58,3 +58,5 @@ lightning_logs/
 convert_coco_to_masks.py
 convert_images_to_png.py
 temp/
+create_excel.py
+inference_benchmarking.py

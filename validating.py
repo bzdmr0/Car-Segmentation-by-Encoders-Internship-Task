@@ -1,6 +1,6 @@
 import os
-from torch.utils.data import DataLoader
 import pytorch_lightning as pl
+from typing import List, Optional, Tuple
 
 from main import (
     SegmentationModel,
@@ -17,6 +17,7 @@ y_valid_dir = os.path.join(DATA_DIR, "valid/masks")
 
 def validate_all_encoders(batch_size: int = 8):
     val_loader = build_dataloader(x_valid_dir, y_valid_dir, batch_size=batch_size)
+    summary: List[Tuple[str, Optional[str], dict]] = []
 
     for encoder_id, (encoder_name, arch) in ENCODER_LIST.items():
         ckpt = find_best_checkpoint_for_encoder(encoder_name)

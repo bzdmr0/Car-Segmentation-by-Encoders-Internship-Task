@@ -44,7 +44,7 @@ def plot_train_val_pairs(df: pd.DataFrame, out_dir: str, base: str, version: str
             best_epoch, best_col, best_val = determine_best_epoch(df,val_col, mode='min')
         else:
             
-        present = [c for c in (train_col, val_col) if c in df.columns]
+            present = [c for c in (train_col, val_col) if c in df.columns]
         if not present:
             continue
         fig, ax = plt.subplots(figsize=(9, 5))
