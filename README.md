@@ -52,6 +52,7 @@ car-segmentation-dataset/
 ### Prerequisites
 - Python 3.8+
 - CUDA 12.1 (for GPU acceleration)
+- Internet connection (for downloading pretrained encoder weights)
 
 ### Setup
 
@@ -120,17 +121,15 @@ python validating.py
 
 This script evaluates the trained models on the validation dataset.
 
-## Project Structure
+## Architecture & Design
 
-```
-├── main.py              # Core classes and utilities
-├── training.py          # Training script for all models  
-├── testing.py           # Testing and evaluation script
-├── validating.py        # Validation script
-├── requirements.txt     # Python dependencies
-├── car-segmentation-dataset/  # Dataset directory
-└── lightning_logs/      # Training logs and checkpoints
-```
+This project follows a modular design pattern:
+
+- **main.py** - Core framework with PyTorch Lightning model, dataset handling, and utilities
+- **training.py** - Automated training pipeline for all encoder combinations  
+- **testing.py** - Comprehensive testing and benchmarking suite
+- **validating.py** - Validation pipeline for model evaluation
+- **Separation of Concerns** - Each script has a specific purpose and can be run independently
 
 ### Core Components (main.py)
 
@@ -139,6 +138,19 @@ This script evaluates the trained models on the validation dataset.
 - **TimingCallback**: Callback for tracking training/validation time
 - **Data Augmentation**: Albumentations-based augmentation pipeline
 - **Utilities**: Functions for checkpointing, plotting, and benchmarking
+
+## Project Structure
+
+```
+├── main.py              # Core classes and utilities
+├── training.py          # Training script for all models  
+├── testing.py           # Testing and evaluation script
+├── validating.py        # Validation script
+├── requirements.txt     # Python dependencies
+├── LICENSE              # MIT License
+├── car-segmentation-dataset/  # Dataset directory
+└── lightning_logs/      # Training logs and checkpoints (created during training)
+```
 
 ## Features
 
