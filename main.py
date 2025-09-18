@@ -17,7 +17,7 @@ import json
 
 
 ENCODER_LIST = {1: ("densenet121","segformer"), 2: ("resnet18","DeepLabV3plus"), 3: ("mobilenet_v2","DeepLabV3plus"), 4: ("resnet18","segformer"), 5: ("mobilenet_v2","segformer")}
-#1: ("densenet121","segformer"), 2: ("resnet18","DeepLabV3plus"), 3: ("mobilenet_v2","DeepLabV3plus"),
+
 ROOT = os.path.dirname(__file__)
 LOGS_DIR = os.path.join(ROOT, 'lightning_logs')
 
@@ -213,7 +213,7 @@ def find_manual_metrics_files(encoder_name: str):
     return sorted(set(glob.glob(pattern)))
 
 class Dataset(BaseDataset):
-    """car-segmentation.v1i.coco-segmentation Dataset. Read images, apply augmentation transformations.
+    """car-segmentation-dataset Dataset. Read images, apply augmentation transformations.
 
     Args:
         images_dir (str): path to images folder
@@ -221,7 +221,6 @@ class Dataset(BaseDataset):
         class_values (list): values of classes to extract from segmentation mask
         augmentation (albumentations.Compose): data transfromation pipeline
             (e.g. flip, scale, etc.)
-
     """
 
     def __init__(
@@ -254,9 +253,6 @@ class Dataset(BaseDataset):
             image, mask = sample["image"], sample["mask"]
 
         return image.transpose(2, 0, 1), mask.transpose(2, 0, 1)
-
-    def __len__(self):
-        return len(self.ids)
     
 # training set images augmentation
 def get_training_augmentation():

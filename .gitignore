@@ -46,17 +46,5 @@ Thumbs.db
 *.mp4
 *.avi
 *.mov
-data/
-img/
-integrate_images.py
-resize_images.py
-split_images.py
-car-segmentation.v1i.coco-segmentation/
-data/
-differences/
 lightning_logs/
-convert_coco_to_masks.py
-convert_images_to_png.py
-temp/
 create_excel.py
-inference_benchmarking.py

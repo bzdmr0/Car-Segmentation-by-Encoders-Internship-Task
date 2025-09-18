@@ -9,7 +9,7 @@ from main import (
     build_dataloader,
 )
 
-DATA_DIR = "./car-segmentation.v1i.coco-segmentation/"
+DATA_DIR = "./car-segmentation-dataset/"
 
 x_valid_dir = os.path.join(DATA_DIR, "valid/images")
 y_valid_dir = os.path.join(DATA_DIR, "valid/masks")

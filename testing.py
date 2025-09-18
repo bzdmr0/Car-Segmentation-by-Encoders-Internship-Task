@@ -14,7 +14,7 @@ from main import (
     build_dataloader,
 )
 
-DATA_DIR = "./car-segmentation.v1i.coco-segmentation/"
+DATA_DIR = "./car-segmentation-dataset/"
 
 x_test_dir = os.path.join(DATA_DIR, "test/images")
 y_test_dir = os.path.join(DATA_DIR, "test/masks")
