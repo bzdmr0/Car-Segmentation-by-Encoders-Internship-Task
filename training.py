@@ -26,8 +26,6 @@ y_valid_dir = os.path.join(DATA_DIR, "valid/masks")
 
 EPOCHS = 20
 
-
-        
 def train_all_encoders(batch_size: int = 8):
     train_loader = build_dataloader(x_train_dir, y_train_dir, batch_size=batch_size)
     val_loader = build_dataloader(x_valid_dir, y_valid_dir, batch_size=batch_size)
@@ -47,10 +45,12 @@ def train_all_encoders(batch_size: int = 8):
             mode="max",
             save_top_k=1,
             save_last=True,
-            filename=f"{encoder_name}-{{epoch:02d}}-{{val_dataset_iou:.4f}}",
+            filename=f"best_{encoder_name}-{arch}-{{epoch:02d}}-{{val_dataset_iou:.4f}}",
             auto_insert_metric_name=False,
+            save_weights_only=True, 
         )
-        early_stop = EarlyStopping(monitor="val_dataset_iou", mode="max", patience=3)
+        checkpoint_callback.__setattr__("FILE_EXTENSION", ".pt")  # Change extension to .pt
+        early_stop = EarlyStopping(monitor="val_dataset_iou", mode="max", patience=5)
         timing_cb = TimingCallback(encoder_name=encoder_name)
 
         trainer = pl.Trainer(
@@ -83,9 +83,8 @@ def train_all_encoders(batch_size: int = 8):
         # Sort by epoch and reset index to make plotting and best-epoch alignment robust
         df = df.sort_values('epoch').reset_index(drop=True) if 'epoch' in df.columns else df
         out_dir = os.path.dirname(metrics_path)
-        base = os.path.splitext(os.path.basename(metrics_path))[0]
         version = os.path.basename(out_dir)
-        plot_train_val_pairs(df, out_dir, base, version)
+        plot_train_val_pairs(df, out_dir, encoder_name, arch, version)
 
 
 if __name__ == "__main__":

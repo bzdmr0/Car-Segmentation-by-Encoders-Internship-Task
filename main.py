@@ -16,11 +16,8 @@ from torch.utils.data import DataLoader
 import json
 
 
-ENCODER_LIST = {1: ("densenet121","segformer"), 2: ("resnet18","DeepLabV3plus"), 3: ("mobilenet_v2","DeepLabV3plus")}
-
-
-
-
+ENCODER_LIST = {1: ("densenet121","segformer"), 2: ("resnet18","DeepLabV3plus"), 3: ("mobilenet_v2","DeepLabV3plus"), 4: ("resnet18","segformer"), 5: ("mobilenet_v2","segformer")}
+#1: ("densenet121","segformer"), 2: ("resnet18","DeepLabV3plus"), 3: ("mobilenet_v2","DeepLabV3plus"),
 ROOT = os.path.dirname(__file__)
 LOGS_DIR = os.path.join(ROOT, 'lightning_logs')
 
@@ -35,9 +32,9 @@ def build_dataloader(x_dir: str, y_dir: str, batch_size: int = 8):
     data_loader = DataLoader(ds, batch_size=batch_size, shuffle=is_train)
     return data_loader
 
-def save_benchmark_result(json_obj: dict, encoder_name: str, output_folder: Optional[str]) -> str:
+def save_benchmark_result(json_obj: dict, encoder_name: str, arch: str, output_folder: Optional[str]) -> str:
     os.makedirs(output_folder, exist_ok=True)
-    out_path = os.path.join(output_folder, f"inference_benchmark_{encoder_name}.json")
+    out_path = os.path.join(output_folder, f"inference_benchmark_{encoder_name}-{arch}.json")
     
     # Ensure encoder name is present in the JSON object
     json_obj = dict(json_obj)
@@ -134,8 +131,8 @@ def benchmark_inference(model: pl.LightningModule, dataloader: DataLoader, encod
     }
 
 
-def find_best_checkpoint_for_encoder(encoder_name: str):
-    pattern = os.path.join(LOGS_DIR, "**", "checkpoints", f"{encoder_name}-*.ckpt")
+def find_best_weight_for_encoder(encoder_name: str, arch: str):
+    pattern = os.path.join(LOGS_DIR, "**", "checkpoints", f"{encoder_name}-{arch}-*pt")
     matches = glob.glob(pattern, recursive=True)
     if not matches:
         return None
@@ -159,7 +156,7 @@ def determine_best_epoch(df: pd.DataFrame, col: str, mode: str = 'max'):
     return None, None, None
 
 
-def plot_train_val_pairs(df: pd.DataFrame, out_dir: str, base: str, version: str):
+def plot_train_val_pairs(df: pd.DataFrame, out_dir: str, encoder_name: str, arch: str, version: str):
     pairs = [
         ('train_f1_score', 'val_f1_score', 'F1-Score'),
         ('train_accuracy', 'val_accuracy', 'Accuracy'),
@@ -200,12 +197,12 @@ def plot_train_val_pairs(df: pd.DataFrame, out_dir: str, base: str, version: str
             if best_col is not None and best_val is not None:
                 subtitle = f" (best: {best_col}={best_val:.4f} @ epoch {best_epoch})"
 
-        ax.set_title(f"{version} - {base} - {title}{subtitle}")
+        ax.set_title(f"{version} - {encoder_name} - {title}{subtitle}")
         ax.set_xlabel('epoch')
         ax.grid(True, alpha=0.3)
         ax.legend()
         fig.tight_layout()
-        out_path = os.path.join(out_dir, f"{base}_{title.lower()}.png")
+        out_path = os.path.join(out_dir, f"{encoder_name}-{arch}_{title.lower()}.png")
         fig.savefig(out_path, dpi=150)
         plt.close(fig)
         print(f"Saved: {out_path}")
@@ -500,7 +497,7 @@ class SegmentationModel(pl.LightningModule):
         }
         return
 
-def visualize_test_predictions(model, test_loader, num_samples=3, encoder_name=""):
+def visualize_test_predictions(model, test_loader, num_samples=3, encoder_name="", arch=""):
     """Visualize test predictions with highlighted differences"""
     # Get a batch of test data
     images, masks = next(iter(test_loader))
@@ -509,7 +506,7 @@ def visualize_test_predictions(model, test_loader, num_samples=3, encoder_name="
         logits = model(images)
     pred_masks = logits.sigmoid()
     ll_root = os.path.join(".", "lightning_logs")
-    visualization_folder = os.path.join(ll_root,f'{encoder_name}_visualizations/')
+    visualization_folder = os.path.join(ll_root,f'{encoder_name}-{arch}_visualizations/')
     os.makedirs(visualization_folder, exist_ok=True)
 
     # Create visualizations a. Yanyana gösterim:
@@ -576,7 +573,6 @@ def visualize_test_predictions(model, test_loader, num_samples=3, encoder_name="
     plt.tight_layout()
     H_D_img = os.path.join(visualization_folder, f'Highlighted_Differences.png')
     plt.savefig(H_D_img, dpi=300, bbox_inches='tight')
-    plt.show()
     
     # Create visualizations b. Yanyana gösterim:
     fig, axes = plt.subplots(num_samples, 3, figsize=(20, 5*num_samples))
@@ -614,7 +610,6 @@ def visualize_test_predictions(model, test_loader, num_samples=3, encoder_name="
     plt.tight_layout()
     O_P_img = os.path.join(visualization_folder, f'Original_and_Predicted_Mask.png')
     plt.savefig(O_P_img, dpi=300, bbox_inches='tight')
-    plt.show()
 
 # -----------------------------
 # Timing utilities
