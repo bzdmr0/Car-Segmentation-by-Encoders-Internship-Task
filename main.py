@@ -130,9 +130,8 @@ def benchmark_inference(model: pl.LightningModule, dataloader: DataLoader, encod
         "architecture": arch,
     }
 
-
 def find_best_weight_for_encoder(encoder_name: str, arch: str):
-    pattern = os.path.join(LOGS_DIR, "**", "checkpoints", f"{encoder_name}-{arch}-*pt")
+    pattern = os.path.join(LOGS_DIR, "**", f"best_{encoder_name}-{arch}-*pt")
     matches = glob.glob(pattern, recursive=True)
     if not matches:
         return None
@@ -253,6 +252,9 @@ class Dataset(BaseDataset):
             image, mask = sample["image"], sample["mask"]
 
         return image.transpose(2, 0, 1), mask.transpose(2, 0, 1)
+    
+    def __len__(self):
+        return len(self.ids)
     
 # training set images augmentation
 def get_training_augmentation():
